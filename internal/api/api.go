@@ -11,15 +11,21 @@ import (
 	"time"
 
 	"github.com/use-assay/assay/internal/horizon"
+	"github.com/use-assay/assay/internal/mechanics"
 	"github.com/use-assay/assay/internal/scan"
 )
 
 //go:embed ui/index.html
 var uiFS embed.FS
 
+// Scanner describes what the API server needs from a scanner.
+type Scanner interface {
+	ScanWithHolder(ctx context.Context, a mechanics.Asset, holder string) (*mechanics.Report, error)
+}
+
 // Server serves scan results.
 type Server struct {
-	Scanner *scan.Scanner
+	Scanner Scanner
 	Log     *slog.Logger
 }
 

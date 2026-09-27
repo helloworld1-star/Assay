@@ -1,15 +1,19 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/use-assay/assay/internal/api"
+	"github.com/use-assay/assay/internal/horizon"
+	"github.com/use-assay/assay/internal/mechanics"
+	"strings"
 )
 
 func newTestServer() http.Handler {
@@ -80,4 +84,102 @@ func TestUnknownPathIs404(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
+}
+
+type stubScanner struct {
+	report *mechanics.Report
+	err    error
+}
+
+func (s *stubScanner) ScanWithHolder(_ context.Context, _ mechanics.Asset, _ string) (*mechanics.Report, error) {
+	return s.report, s.err
+}
+
+func TestScanPaths(t *testing.T) {
+	const issuer = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+
+	t.Run("success", func(t *testing.T) {
+		rep := &mechanics.Report{
+			Asset:    mechanics.Asset{Code: "USDC", Issuer: issuer},
+			Severity: mechanics.Clear,
+		}
+		srv := &api.Server{
+			Scanner: &stubScanner{report: rep},
+			Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}
+
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/scan?asset=USDC-"+issuer, nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		var got mechanics.Report
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode report: %v", err)
+		}
+		if got.Asset.Code != "USDC" || got.Asset.Issuer != issuer {
+			t.Errorf("Asset = %+v, want Code=USDC Issuer=%s", got.Asset, issuer)
+		}
+		if got.Severity != mechanics.Clear {
+			t.Errorf("Severity = %v, want Clear", got.Severity)
+		}
+	})
+
+	t.Run("degraded", func(t *testing.T) {
+		rep := &mechanics.Report{
+			Asset:    mechanics.Asset{Code: "USDC", Issuer: issuer},
+			Severity: mechanics.Medium,
+		}
+		srv := &api.Server{
+			Scanner: &stubScanner{report: rep},
+			Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}
+
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/scan?asset=USDC-"+issuer, nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 for degraded result", rec.Code)
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		srv := &api.Server{
+			Scanner: &stubScanner{err: horizon.ErrNotFound},
+			Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}
+
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/scan?asset=USDC-"+issuer, nil))
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("upstream failure", func(t *testing.T) {
+		upstreamErr := errors.New("connection refused")
+		srv := &api.Server{
+			Scanner: &stubScanner{err: upstreamErr},
+			Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}
+
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/scan?asset=USDC-"+issuer, nil))
+
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("status = %d, want 502", rec.Code)
+		}
+
+		var body struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode error body: %v", err)
+		}
+		if !strings.Contains(body.Error, "connection refused") {
+			t.Errorf("error body %q missing upstream error text", body.Error)
+		}
+	})
 }
