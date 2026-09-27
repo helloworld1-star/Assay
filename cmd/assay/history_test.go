@@ -174,7 +174,6 @@ func TestServerTimeoutsAndGracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -188,7 +187,11 @@ func TestServerTimeoutsAndGracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /healthz: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("close response body: %v", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
@@ -200,6 +203,8 @@ func TestServerTimeoutsAndGracefulShutdown(t *testing.T) {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		t.Errorf("Shutdown failed: %v", err)
 	}
+
+	_ = ln.Close()
 
 	select {
 	case err := <-errChan:
