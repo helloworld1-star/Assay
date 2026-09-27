@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/use-assay/assay/internal/api"
@@ -251,7 +253,28 @@ func runServe(args []string, log *slog.Logger) error {
 		Addr:              *addr,
 		Handler:           api.NewServer(log).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
-	log.Info("assay listening", "addr", *addr)
-	return srv.ListenAndServe()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	errChan := make(chan error, 1)
+	go func() {
+		log.Info("assay listening", "addr", *addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errChan <- err
+		}
+	}()
+
+	select {
+	case err := <-errChan:
+		return err
+	case <-ctx.Done():
+		log.Info("shutting down server gracefully")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return srv.Shutdown(shutdownCtx)
+	}
 }
