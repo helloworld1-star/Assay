@@ -96,6 +96,9 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if report.Undetermined {
+		w.Header().Set("X-Assay-Undetermined", "true")
+	}
 	writeJSON(w, http.StatusOK, report)
 }
 

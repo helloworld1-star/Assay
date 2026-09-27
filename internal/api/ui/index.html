@@ -135,13 +135,14 @@ async function scan() {
   out.innerHTML = '<p class="note">Scanning…</p>';
   try {
     const r = await fetch('/api/v1/scan?asset=' + encodeURIComponent(asset));
+    const isUndetermined = r.headers.get('X-Assay-Undetermined') === 'true';
     const body = await r.json();
     if (!r.ok) {
       out.innerHTML = `<div class="err"><strong>Could not scan.</strong> ${esc(body.error)}
         <p class="note">This is not a safety result. Assay reports only what it fetched.</p></div>`;
       return;
     }
-    render(body);
+    render(body, isUndetermined);
   } catch (err) {
     out.innerHTML = `<div class="err"><strong>Request failed.</strong> ${esc(err.message)}</div>`;
   } finally {
@@ -149,10 +150,14 @@ async function scan() {
   }
 }
 
-function render(rep) {
+function render(rep, isUndetermined) {
   const esc_ = esc;
   const escalated = rep.escalated
     ? `<p class="note">Escalated from <strong>${esc_(rep.base_severity)}</strong> by curated reputation evidence.</p>`
+    : '';
+
+  const undeterminedBanner = (isUndetermined || rep.undetermined)
+    ? `<div class="err" style="border-color: var(--medium); color: var(--medium); margin-bottom: 1rem;"><strong>Degraded scan:</strong> source outage detected (X-Assay-Undetermined: true)</div>`
     : '';
 
   const findings = rep.findings.map(f => `
@@ -171,6 +176,7 @@ function render(rep) {
     </div>`).join('');
 
   out.innerHTML = `
+    ${undeterminedBanner}
     <div class="axes">
       <div class="card">
         <h2>Severity — issuer capability</h2>
